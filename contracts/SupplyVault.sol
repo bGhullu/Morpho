@@ -14,7 +14,7 @@ import {Types} from "./interfaces/Types.sol";
 // import {SupplyVaultBase} from "./SupplyVaultBase.sol";
 
 /// @title SupplyVault.
-/// @author Morpho Labs.
+/// @author Morpho Labs and Stoa
 /// @custom:contact security@morpho.xyz
 /// @notice ERC4626-upgradeable Tokenized Vault abstract implementation for Morpho-Compound.
 
