@@ -2,135 +2,91 @@
 pragma solidity 0.8.13;
 
 import {ISupplyVault} from "./interfaces/ISupplyVault.sol";
+import {IMorpho} from "./interfaces/IMorpho.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {ERC20, SafeTransferLib} from "@rari-capital/solmate/src/utils/SafeTransferLib.sol";
 import {FixedPointMathLib} from "@rari-capital/solmate/src/utils/FixedPointMathLib.sol";
 import {SafeCastLib} from "@rari-capital/solmate/src/utils/SafeCastLib.sol";
+import {ERC4626UpgradeableSafe, ERC20Upgradeable} from "./ERC4626UpgradeableSafe.sol";
+import {CompoundMath} from "./interfaces/CompoundMath.sol";
+import {Types} from "./interfaces/Types.sol";
 
 // import {SupplyVaultBase} from "./SupplyVaultBase.sol";
 
 /// @title SupplyVault.
 /// @author Morpho Labs.
 /// @custom:contact security@morpho.xyz
-/// @notice ERC4626-upgradeable Tokenized Vault implementation for Morpho-Compound, which tracks rewards from Compound's pool accrued by its users.
-contract SupplyVault is ISupplyVault {
-    using FixedPointMathLib for uint256;
-    using SafeCastLib for uint256;
+/// @notice ERC4626-upgradeable Tokenized Vault abstract implementation for Morpho-Compound.
+
+contract SupplyVault is ERC4626UpgradeableSafe, OwnableUpgradeable {
+    using CompoundMath for uint256;
     using SafeTransferLib for ERC20;
 
-    /// EVENTS ///
+    /// ERRORS ///
 
-    /// @notice Emitted when a user accrues its rewards.
-    /// @param user The address of the user.
-    /// @param index The new index of the user (also the global at the moment of the update).
-    /// @param unclaimed The new unclaimed amount of the user.
-    event Accrued(address indexed user, uint256 index, uint256 unclaimed);
-
-    /// @notice Emitted when a user claims its rewards.
-    /// @param user The address of the user.
-    /// @param claimed The amount of rewards claimed.
-    event Claimed(address indexed user, uint256 claimed);
+    /// @notice Thrown when the zero address is passed as input.
+    error ZeroAddress();
 
     /// STORAGE ///
 
-    struct UserRewardsData {
-        uint128 index; // User index for the reward token.
-        uint128 unclaimed; // User's unclaimed rewards.
-    }
+    IMorpho public immutable morpho; // The main Morpho contract.
+    address public immutable wEth; // The address of WETH token.
+    ERC20 public immutable comp; // The COMP token.
 
-    uint256 public rewardsIndex; // The vault's rewards index.
-    mapping(address => UserRewardsData) public userRewards; // The rewards index of a user, used to track rewards accrued.
+    address public poolToken; // The pool token corresponding to the market to supply to through this vault.
 
     /// CONSTRUCTOR ///
 
     /// @dev Initializes network-wide immutables.
     /// @param _morpho The address of the main Morpho contract.
-    constructor(address _morpho) {}
 
-    /// INITIALIZER ///
-
-    /// @notice Initializes the vault.
-    /// @param _poolToken The address of the pool token corresponding to the market to supply through this vault.
-    /// @param _name The name of the ERC20 token associated to this tokenized vault.
-    /// @param _symbol The symbol of the ERC20 token associated to this tokenized vault.
-    /// @param _initialDeposit The amount of the initial deposit used to prevent pricePerShare manipulation.
-    // function initialize(
-    //     address _poolToken,
-    //     string calldata _name,
-    //     string calldata _symbol,
-    //     uint256 _initialDeposit
-    // ) external initializer {
-    //     __SupplyVaultBase_init(_poolToken, _name, _symbol, _initialDeposit);
-    // }
-
-    /// EXTERNAL ///
-
-    /// @notice Claims rewards on behalf of `_user`.
-    /// @param _user The address of the user to claim rewards for.
-    /// @return rewardsAmount The amount of rewards claimed.
-    function claimRewards(address _user) external returns (uint256 rewardsAmount) {
-        rewardsAmount = _accrueUnclaimedRewards(_user);
-
-        if (rewardsAmount > 0) {
-            userRewards[_user].unclaimed = 0;
-
-            // comp.safeTransfer(_user, rewardsAmount);
-        }
-
-        emit Claimed(_user, rewardsAmount);
+    constructor(address _morpho) {
+        morpho = IMorpho(_morpho);
+        wEth = morpho.wEth();
+        comp = ERC20(morpho.comptroller().getCompAddress());
     }
 
-    /// INTERNAL ///
+    function totalAssets() public view override returns (uint256) {
+        address poolTokenMem = poolToken;
+        Types.SupplyBalance memory supplyBalance = morpho.supplyBalanceInOf(
+            poolTokenMem,
+            address(this)
+        );
 
-    function _deposit(
-        address _caller,
-        address _receiver,
-        uint256 _assets,
-        uint256 _shares
-    ) internal virtual override {
-        _accrueUnclaimedRewards(_receiver);
-        super._deposit(_caller, _receiver, _assets, _shares);
+        return
+            supplyBalance.onPool.mul(morpho.lastPoolIndexes(poolTokenMem).lastSupplyPoolIndex) +
+            supplyBalance.inP2P.mul(morpho.p2pSupplyIndex(poolTokenMem));
     }
 
-    function _withdraw(
-        address _caller,
-        address _receiver,
-        address _owner,
-        uint256 _assets,
-        uint256 _shares
-    ) internal virtual override {
-        _accrueUnclaimedRewards(_receiver);
-        super._withdraw(_caller, _receiver, _owner, _assets, _shares);
+    function deposit(uint256 assets, address receiver) public virtual override returns (uint256) {
+        // Update the indexes to get the most up-to-date total assets balance.
+        morpho.updateP2PIndexes(poolToken);
+        return super.deposit(assets, receiver);
     }
 
-    function _accrueUnclaimedRewards(address _user) internal returns (uint256 unclaimed) {
-        uint256 supply = totalSupply();
-        uint256 rewardsIndexMem;
+    function mint(uint256 shares, address receiver) public virtual override returns (uint256) {
+        // Update the indexes to get the most up-to-date total assets balance.
+        morpho.updateP2PIndexes(poolToken);
+        return super.mint(shares, receiver);
+    }
 
-        if (supply > 0) {
-            address[] memory poolTokens = new address[](1);
-            poolTokens[0] = poolToken;
-            rewardsIndexMem =
-                rewardsIndex +
-                morpho.claimRewards(poolTokens, false).divWadDown(supply);
-        } else rewardsIndexMem = rewardsIndex;
+    function withdraw(
+        uint256 assets,
+        address receiver,
+        address owner
+    ) public virtual override returns (uint256) {
+        // Update the indexes to get the most up-to-date total assets balance.
+        morpho.updateP2PIndexes(poolToken);
+        return super.withdraw(assets, receiver, owner);
+    }
 
-        UserRewardsData storage userRewardsData = userRewards[_user];
-        rewardsIndex = rewardsIndexMem;
-        uint256 rewardsIndexDiff;
-
-        // Safe because we always have `rewardsIndex` >= `userRewardsData.index`.
-        unchecked {
-            rewardsIndexDiff = rewardsIndexMem - userRewardsData.index;
-        }
-
-        unclaimed = userRewardsData.unclaimed;
-        if (rewardsIndexDiff > 0) {
-            unclaimed += balanceOf(_user).mulWadDown(rewardsIndexDiff).safeCastTo128();
-            userRewardsData.unclaimed = unclaimed.safeCastTo128();
-        }
-
-        userRewardsData.index = rewardsIndexMem.safeCastTo128();
-
-        emit Accrued(_user, rewardsIndexMem, unclaimed);
+    function redeem(
+        uint256 shares,
+        address receiver,
+        address owner
+    ) public virtual override returns (uint256) {
+        // Update the indexes to get the most up-to-date total assets balance.
+        morpho.updateP2PIndexes(poolToken);
+        return super.redeem(shares, receiver, owner);
     }
 }

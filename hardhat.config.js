@@ -10,7 +10,7 @@ const MAINNET_RPC_URL = process.env.MAINNET_RPC_URL
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
-    solidity: { compilers: [{ version: "0.8.13" }, { version: "0.8.4" }] },
+    solidity: { compilers: [{ version: "0.8.13" }, { version: "0.8.4" }, { version: "0.5.16" }] },
     defaultNetwork: "hardhat",
     networks: {
         hardhat: {
