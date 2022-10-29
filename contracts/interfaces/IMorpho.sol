@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GNU AGPLv3
 pragma solidity ^0.8.0;
 
-import {IComptroller} from "@thenextblock/hardhat-compound/dist/contracts/compound/Comptroller.sol";
+//import {IComptroller} from "@thenextblock/hardhat-compound/dist/contracts/compound/Comptroller.sol";
 
 interface IMorpho {
     function isClaimRewardsPaused() external view returns (bool);
@@ -22,7 +22,7 @@ interface IMorpho {
 
     function treasuryVault() external view returns (address);
 
-    function comptroller() external view returns (IComptroller);
+    //function comptroller() external view returns (IComptroller);
 
     function cEth() external view returns (address);
 
